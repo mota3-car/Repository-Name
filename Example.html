@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>لعبة السيارة — فورمولا</title>
+<style>
+  body{margin:0;font-family:Segoe UI,Arial;background:#071426;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh}
+  .wrap{width:960px;max-width:98vw;padding:10px}
+  header{margin-bottom:10px}
+  h2{margin:0 0 6px 0}
+  #gameCanvas{width:100%;height:320px;border-radius:8px;display:block;background:#082131}
+  .hud{display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:15px}
+  .controls button{margin-right:6px;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);cursor:pointer;background:rgba(255,255,255,0.02);color:#fff}
+  .overlay{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center}
+  .msg{background:rgba(0,0,0,0.6);padding:16px;border-radius:10px;text-align:center}
+  .btn{padding:8px 12px;border-radius:8px;border:0;background:#ffb703;color:#001;font-weight:700;cursor:pointer}
+  .levels button{margin:0 4px;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);cursor:pointer;background:rgba(255,255,255,0.02);color:#fff}
+  .levels button.active{background:#4ade80;color:#001}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<h2>🏁 لعبة السيارة — فورمولا — من تصميم مطيع</h2>
+<div class="muted">التحكم: ↑ قفز — ↓ إنخفاض — استعمل زر ابدأ للبدء</div>
+</header>
+
+<div class="levels" id="levelBtns">
+  <button data-lvl="very_easy">سهل جدًا</button>
+  <button data-lvl="easy">سهل</button>
+  <button data-lvl="medium" class="active">متوسط</button>
+  <button data-lvl="hard">صعب</button>
+  <button data-lvl="very_hard">صعب جدًا</button>
+</div>
+
+<div style="position:relative;margin-top:10px">
+  <canvas id="gameCanvas" width="960" height="320"></canvas>
+  <div id="overlay" class="overlay" style="pointer-events:none">
+    <div id="msgBox" class="msg" style="pointer-events:auto">
+      <div id="msgTitle" style="font-size:18px;font-weight:700">جاهز؟</div>
+      <div style="margin-top:8px;color:#b8c7d6">اضغط ↑ أو زر "ابدأ" للانطلاق</div>
+      <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
+        <button id="startBtn" class="btn">ابدأ</button>
+        <button id="resetBtn" class="btn">إعادة</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="hud">
+  <div>النتيجة: <span id="score">0</span> — أفضل نتيجة: <span id="best">0</span></div>
+  <div class="controls">
+    <button id="jumpBtn">قفز</button>
+    <button id="duckBtn">انخفض</button>
+  </div>
+</div>
+
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// واجهة
+const scoreEl = document.getElementById('score');
+const bestEl = document.getElementById('best');
+const msgBox = document.getElementById('msgBox');
+const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
+const jumpBtn = document.getElementById('jumpBtn');
+const duckBtn = document.getElementById('duckBtn');
+const levelBtns = document.getElementById('levelBtns');
+
+let score = 0, best = +localStorage.carBest||0, frame = 0;
+let running = false, gameOver = false;
+let obstacles = [], spawnTimer = 0, spawnInterval = 80, speed = 5;
+let currentLevel = 'medium';
+
+bestEl.textContent = best;
+
+const LEVELS = {
+  very_easy:{speed:3, jump:-18, gravity:0.55, spawn:120},
+  easy:{speed:4, jump:-17, gravity:0.6, spawn:100},
+  medium:{speed:5, jump:-16, gravity:0.68, spawn:80},
+  hard:{speed:6.5, jump:-15, gravity:0.75, spawn:60},
+  very_hard:{speed:8, jump:-14, gravity:0.82, spawn:48}
+};
+
+// سيارة فورمولا — جسم منخفض
+const player = {x:80, baseY: H-68, y: H-68, w:72, h:28, vy:0, gravity:0.68, jumpForce:-16, onGround:true, duck:false};
+
+function applyLevel(l){
+  currentLevel = l;
+  const cfg = LEVELS[l];
+  speed = cfg.speed; spawnInterval = cfg.spawn; player.jumpForce = cfg.jump; player.gravity = cfg.gravity;
+  Array.from(levelBtns.children).forEach(b=> b.classList.toggle('active', b.dataset.lvl===l));
+  resetGame();
+}
+
+function spawnObstacle(){
+  const type = Math.random() < 0.6 ? 'low' : 'tall';
+  if(type==='low'){
+    const h = 14 + Math.random()*18; // منخفض
+    const w = 24 + Math.random()*30;
+    obstacles.push({x: W + 40, y: H - 40 - h, w, h, type});
+  }else{
+    const h = 40 + Math.random()*28;
+    const w = 22 + Math.random()*26;
+    obstacles.push({x: W + 40, y: H - 40 - h, w, h, type});
+  }
+}
+
+function resetGame(){
+  score = 0; frame = 0; obstacles = []; spawnTimer = 0; running = false; gameOver = false;
+  player.y = player.baseY; player.vy = 0; player.onGround = true; player.duck = false; player.h = 28; player.w = 72;
+  scoreEl.textContent = 0; msgBox.style.display = 'block'; msgBox.querySelector('#msgTitle').textContent = 'جاهز؟';
+}
+
+function startGame(){ if(!running && !gameOver){ running = true; msgBox.style.display='none'; }}
+
+function endGame(){ gameOver = true; running = false; msgBox.style.display='block'; msgBox.querySelector('#msgTitle').textContent = 'انتهت اللعبة — نتيجتك: '+score; if(score>best){ best = score; localStorage.carBest = best; bestEl.textContent = best;} }
+
+function jump(){ if(gameOver) return; startGame(); if(player.onGround){ player.vy = player.jumpForce; player.onGround = false; }}
+function duck(){ if(gameOver) return; startGame(); if(player.onGround && !player.duck){ player.duck = true; player.h = 18; player.y = player.baseY + (28-18); }}
+function unduck(){ if(player.duck){ player.duck = false; player.h = 28; player.y = player.baseY; }}
+
+// تحكمات
+window.addEventListener('keydown', e=>{
+  if(e.key === 'ArrowUp' || e.key === ' ') jump();
+  if(e.key === 'ArrowDown') duck();
+});
+window.addEventListener('keyup', e=>{ if(e.key === 'ArrowDown') unduck(); });
+
+jumpBtn.addEventListener('click', jump);
+canvas.addEventListener('touchstart', jump);
+duckBtn.addEventListener('mousedown', duck); duckBtn.addEventListener('mouseup', unduck);
+startBtn.addEventListener('click', ()=>{ if(gameOver) resetGame(); startGame(); });
+resetBtn.addEventListener('click', resetGame);
+levelBtns.addEventListener('click', e=>{ const b = e.target.closest('button'); if(!b) return; applyLevel(b.dataset.lvl); });
+
+function rectsOverlap(a,b){ return !(a.x + a.w < b.x || a.x > b.x + b.w || a.y + a.h < b.y || a.y > b.y + b.h); }
+
+function update(){
+  if(!running || gameOver) return;
+  frame++;
+  player.vy += player.gravity; player.y += player.vy;
+  if(player.y >= player.baseY){ player.y = player.baseY; player.vy = 0; player.onGround = true; }
+
+  for(let i = obstacles.length-1; i>=0; i--){ obstacles[i].x -= speed; if(obstacles[i].x + obstacles[i].w < -60) obstacles.splice(i,1); }
+
+  // زيادة طفيفة مع الزمن وفق المستوى
+  if(frame % 1200 === 0) speed = Math.min(speed + 0.4, LEVELS[currentLevel].speed + 3);
+
+  spawnTimer++;
+  if(spawnTimer >= spawnInterval){ spawnTimer = 0; spawnObstacle(); }
+
+  // تصادم
+  const pb = {x: player.x, y: player.y, w: player.w, h: player.h};
+  for(const ob of obstacles){ if(rectsOverlap(pb, ob)){ endGame(); return; }}
+
+  if(frame % 6 === 0){ score++; scoreEl.textContent = score; }
+}
+
+function drawFormula(x,y,w,h){
+  // جسم أساسي منخفض
+  ctx.fillStyle = '#e11d48';
+  ctx.beginPath();
+  ctx.moveTo(x, y + h*0.5);
+  ctx.quadraticCurveTo(x + w*0.2, y - h*0.4, x + w*0.5, y - h*0.35);
+  ctx.quadraticCurveTo(x + w*0.8, y - h*0.4, x + w, y + h*0.5);
+  ctx.closePath(); ctx.fill();
+  // قمرة
+  ctx.fillStyle = '#111827'; ctx.fillRect(x + w*0.28, y - h*0.2, w*0.28, h*0.45);
+  // جناح خلفي
+  ctx.fillStyle = '#0f172a'; ctx.fillRect(x + w*0.82, y - h*0.25, w*0.3, h*0.12);
+  // عجلات
+  ctx.fillStyle = '#111827'; ctx.beginPath(); ctx.arc(x + w*0.22, y + h*0.6, h*0.22, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x + w*0.78, y + h*0.6, h*0.22, 0, Math.PI*2); ctx.fill();
+}
+
+function draw(){
+  // خلفية داكنة - ثابتة (أزلنا النهار/ليل)
+  ctx.fillStyle = '#071426'; ctx.fillRect(0,0,W,H);
+  // أرض
+  ctx.fillStyle = '#0b2b3a'; ctx.fillRect(0, H-40, W, 40);
+
+  // أثر الطريق
+  ctx.fillStyle = '#08323a'; ctx.fillRect(0, H-54, W, 6);
+
+  // رسم العقبات
+  for(const ob of obstacles){ ctx.fillStyle = '#f43f5e'; ctx.fillRect(ob.x, ob.y, ob.w, ob.h); }
+
+  // رسم السيارة فورمولا
+  drawFormula(player.x, player.y, player.w, player.h);
+}
+
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+
+// تهيئة ابتدائية
+applyLevel('medium'); resetGame(); loop();
+
+</script>
+</body>
+</html>
